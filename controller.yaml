@@ -1,31 +1,32 @@
 substitutions:
   device_name: "heating_controller"
-  # Inputuri de termostate
+  # Inputuri de termostate (5 zone)
   thermostat_pin_1: "D1"
   thermostat_pin_2: "D2"
   thermostat_pin_3: "D5"
   thermostat_pin_4: "D6"
   thermostat_pin_5: "D7"
-  thermostat_pin_6: "D0"
 
-  # Releele fizice asociate termostatelor
+  # Releele fizice asociate termostatelor (5 zone)
   relay_pin_1: "D3"
   relay_pin_2: "D4"
-  relay_pin_3: "RX"   # cautați să nu folosiți serial daca o folosiți pentru debug
+  relay_pin_3: "RX"   # cautați să nu folosiți serial dacă o folosiți pentru debug
   relay_pin_4: "TX"
   relay_pin_5: "D8"
-  relay_pin_6: "D2"   # ATENȚIE: schimbă dacă folosește D2 ca termostat!
 
-  boiler_relay_pin: "D9"  # verifică dacă pinul există pe placa ta
-
+  boiler_relay_pin: "D0"  # GPIO16 - perfect pentru centrală
+  
 esphome:
   name: ${device_name}
-  platform: ESP8266
+
+esp8266:
   board: d1_mini
+  framework:
+    version: recommended
 
 wifi:
-  ssid: "YOUR_SSID"
-  password: "YOUR_PASS"
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
   ap:
     ssid: "${device_name}_AP"
     password: "12345678"
@@ -45,9 +46,18 @@ api:
           ESP_LOGI("api", "Home Assistant disconnected");
 
 ota:
+  - platform: esphome
 
-watchdog:
-  timeout: 15s
+time:
+  - platform: sntp
+    id: my_time
+    timezone: Europe/Bucharest
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    on_time_sync:
+      then:
+        - lambda: 'ESP_LOGI("time", "NTP synchronized");'
 
 # --------------------
 # GLOBALS (persistente acolo unde are sens)
@@ -69,44 +79,44 @@ globals:
     initial_value: '30'
 
   - id: thermostat_raw_last_state
-    type: bool[6]
+    type: bool[5]
     restore_value: no
-    initial_value: '{false,false,false,false,false,false}'
+    initial_value: '{false,false,false,false,false}'
 
   - id: thermostat_raw_last_change
-    type: unsigned long[6]
+    type: unsigned long[5]
     restore_value: no
-    initial_value: '{0,0,0,0,0,0}'
+    initial_value: '{0,0,0,0,0}'
 
   - id: thermostat_request   # starea debounced a termostatelor (input local)
-    type: bool[6]
+    type: bool[5]
     restore_value: yes
-    initial_value: '{false,false,false,false,false,false}'
+    initial_value: '{false,false,false,false,false}'
 
   - id: ha_request           # cererile din HA (virtual switches)
-    type: bool[6]
+    type: bool[5]
     restore_value: yes
-    initial_value: '{false,false,false,false,false,false}'
+    initial_value: '{false,false,false,false,false}'
 
-  - id: effective_request    # ce se aplica (in Auto -> termostat_request, in Manual -> ha_request)
-    type: bool[6]
+  - id: effective_request    # ce se aplica (in Auto -> thermostat_request, in Manual -> ha_request)
+    type: bool[5]
     restore_value: no
-    initial_value: '{false,false,false,false,false,false}'
+    initial_value: '{false,false,false,false,false}'
 
   - id: zone_start_time      # timestamp (ms) cand zona a devenit efectiv ON (real active)
-    type: unsigned long[6]
+    type: unsigned long[5]
     restore_value: yes
-    initial_value: '{0,0,0,0,0,0}'
+    initial_value: '{0,0,0,0,0}'
 
   - id: zone_force_keep_until   # pana la timestamp (ms) mentinem deschisa zona (protectie)
-    type: unsigned long[6]
+    type: unsigned long[5]
     restore_value: yes
-    initial_value: '{0,0,0,0,0,0}'
+    initial_value: '{0,0,0,0,0}'
 
   - id: prev_effective_request
-    type: bool[6]
+    type: bool[5]
     restore_value: no
-    initial_value: '{false,false,false,false,false,false}'
+    initial_value: '{false,false,false,false,false}'
 
   - id: boiler_pending
     type: bool
@@ -128,38 +138,116 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Statistici
+  - id: total_runtime_ms
+    type: unsigned long
+    restore_value: yes
+    initial_value: '0'
+  
+  - id: daily_runtime_ms
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+    
+  - id: daily_cycles_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+    
+  - id: last_reset_day
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  
+  - id: system_status_text
+    type: std::string
+    restore_value: no
+    initial_value: '"Idle"'
+    
+  - id: active_zones_text
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  - id: forced_zones_text
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
 # --------------------
 # INPUTS: raw thermostats (internal = true -> nu sunt expuse direct)
-# Debounce se face software în interval lambda (pentru a fi configurabil din HA)
 # --------------------
 binary_sensor:
   - platform: gpio
-    pin: ${thermostat_pin_1}
+    pin:
+      number: ${thermostat_pin_1}
+      mode: INPUT_PULLUP
+      inverted: true   # dacă logica hardware este astfel
     id: ts_raw_1
     internal: true
   - platform: gpio
-    pin: ${thermostat_pin_2}
+    pin:
+      number: ${thermostat_pin_2}
+      mode: INPUT_PULLUP
+      inverted: true   # dacă logica hardware este astfel
     id: ts_raw_2
     internal: true
   - platform: gpio
-    pin: ${thermostat_pin_3}
+    pin:
+      number: ${thermostat_pin_3}
+      mode: INPUT_PULLUP
+      inverted: true   # dacă logica hardware este astfel
     id: ts_raw_3
     internal: true
   - platform: gpio
-    pin: ${thermostat_pin_4}
+    pin:
+      number: ${thermostat_pin_4}
+      mode: INPUT_PULLUP
+      inverted: true   # dacă logica hardware este astfel
     id: ts_raw_4
     internal: true
   - platform: gpio
-    pin: ${thermostat_pin_5}
+    pin:
+      number: ${thermostat_pin_5}
+      mode: INPUT_PULLUP
+      inverted: true   # dacă logica hardware este astfel
     id: ts_raw_5
     internal: true
-  - platform: gpio
-    pin: ${thermostat_pin_6}
-    id: ts_raw_6
-    internal: true
+
   - platform: template
     name: "Boiler Pending"
     lambda: return id(boiler_pending);
+
+  - platform: status
+    name: "Heating Controller Online"
+
+  - platform: template
+    name: "System Heating"
+    id: system_heating_binary
+    lambda: |-
+      return id(boiler_active);
+      
+  - platform: template  
+    name: "System Pending"
+    id: system_pending_binary
+    lambda: |-
+      return id(boiler_pending);
+      
+  - platform: template
+    name: "Any Zone Forced"
+    id: any_zone_forced_binary
+    lambda: |-
+      unsigned long now = millis();
+      for (int i = 0; i < 5; i++) {
+        if (id(zone_force_keep_until)[i] > now) return true;
+      }
+      return false;
+
+  - platform: template
+    name: "High Cycle Rate Alert"
+    id: high_cycle_rate_alert
+    lambda: |-
+      return id(daily_cycles_count) > 8;
 
 # --------------------
 # PHYSICAL RELAYS (nu sunt expuse direct)
@@ -185,21 +273,16 @@ switch:
     pin: ${relay_pin_5}
     id: phys_relay_zone_5
     restore_mode: ALWAYS_OFF
-  - platform: gpio
-    pin: ${relay_pin_6}
-    id: phys_relay_zone_6
-    restore_mode: ALWAYS_OFF
 
   - platform: gpio
     pin: ${boiler_relay_pin}
     id: phys_relay_boiler
+    internal: true
     name: "Physical Boiler Relay"
     restore_mode: ALWAYS_OFF
 
 # --------------------
 # VIRTUAL SWITCHES (expuse in HA) - inhibate în Auto
-# Acestea seteză ha_request[] doar în modul Manual
-# lambda returnează starea care va fi afișată în HA
 # --------------------
   - platform: template
     name: "Virtual Zone 1"
@@ -302,36 +385,14 @@ switch:
           }
 
   - platform: template
-    name: "Virtual Zone 6"
-    id: v_zone_6
-    optimistic: false
-    lambda: |-
-      if (id(control_mode) == 0) return false;
-      return id(ha_request)[5];
-    turn_on_action:
-      - lambda: |-
-          if (id(control_mode) == 1) {
-            id(ha_request)[5] = true;
-            ESP_LOGI("HA", "Virtual Zone 6 ON (manual)");
-          }
-    turn_off_action:
-      - lambda: |-
-          if (id(control_mode) == 1) {
-            id(ha_request)[5] = false;
-            ESP_LOGI("HA", "Virtual Zone 6 OFF (manual)");
-          }
-
-  - platform: template
     name: "Virtual Boiler"
     id: v_boiler
     optimistic: false
     lambda: |-
-      // Afișăm starea reală (boiler_active) indiferent de mod
       return id(boiler_active);
     turn_on_action:
       - lambda: |-
           if (id(control_mode) == 1) {
-            // manual: permite pornirea imediată a centralei
             id(boiler_pending) = false;
             id(boiler_active) = true;
             id(phys_relay_boiler).turn_on();
@@ -347,7 +408,7 @@ switch:
           }
 
 # --------------------
-# Select + Number in HA pentru mod și relee
+# Select + Number in HA pentru mod și parametri
 # --------------------
 select:
   - platform: template
@@ -376,6 +437,7 @@ number:
     max_value: 600
     step: 10
     optimistic: true
+    initial_value: 180
     set_action:
       - lambda: |-
           id(heating_delay_ms) = (unsigned long)(x * 1000);
@@ -388,26 +450,156 @@ number:
     max_value: 300
     step: 5
     optimistic: true
+    initial_value: 30
     set_action:
       - lambda: |-
           id(debounce_s) = (int)x;
           ESP_LOGI("main", "Debounce time changed via HA: %d s", (int)x);
 
 # --------------------
-# Senzor de status petntru disponibilitate. Devine ”unavailable” când ESP se deconectează
+# TEXT SENSORS - Status și informații
 # --------------------
-binary_sensor:
-  - platform: status
-    name: "Heating Controller Online"
+text_sensor:
+  - platform: template
+    name: "System Status"
+    id: system_status_sensor
+    lambda: |-
+      return id(system_status_text);
+    update_interval: 1s
+    
+  - platform: template
+    name: "Active Zones"
+    id: active_zones_sensor
+    lambda: |-
+      return id(active_zones_text);
+    update_interval: 2s
+    
+  - platform: template
+    name: "Forced Zones"
+    id: forced_zones_sensor
+    lambda: |-
+      return id(forced_zones_text);
+    update_interval: 2s
+
+  - platform: template
+    name: "Controller Mode"
+    lambda: |-
+      return id(control_mode) == 0 ? std::string("Auto") : std::string("Manual");
+    update_interval: 5s
 
 # --------------------
-# Bucla de control principală: rulează la fiecare secundă, implementează:
-# - debounce pentru termostate brute (configurabile)
-# - selecție effective_request (Auto/Manual)
-# - protecție: forțează menținerea zonelor deschise dacă este necesar
-# - logica pornire/așteptare/oprire centrală
-# - închidere automată a zonelor forțate la expirarea protecției
-# - înregistrarea evenimentelor cheie
+# SENSORS numerici - Timeri și statistici
+# --------------------
+sensor:
+  - platform: template
+    name: "Boiler Delay Countdown"
+    id: boiler_delay_countdown
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    lambda: |-
+      if (!id(boiler_pending)) return 0;
+      unsigned long elapsed = millis() - id(boiler_pending_since);
+      unsigned long remaining = id(heating_delay_ms) > elapsed ? 
+        (id(heating_delay_ms) - elapsed) / 1000 : 0;
+      return (float)remaining;
+    update_interval: 1s
+
+  - platform: template
+    name: "Current Session Runtime"
+    id: current_session_runtime
+    unit_of_measurement: "min"
+    accuracy_decimals: 1
+    lambda: |-
+      if (!id(boiler_active)) return 0;
+      unsigned long earliest_start = ULONG_MAX;
+      for (int i = 0; i < 5; i++) {
+        if (id(zone_start_time)[i] > 0 && id(zone_start_time)[i] < earliest_start) {
+          earliest_start = id(zone_start_time)[i];
+        }
+      }
+      if (earliest_start == ULONG_MAX) return 0;
+      return (float)(millis() - earliest_start) / 60000.0;
+    update_interval: 10s
+
+  - platform: template
+    name: "Daily Runtime"
+    id: daily_runtime_sensor
+    unit_of_measurement: "h"
+    accuracy_decimals: 2
+    lambda: |-
+      return (float)id(daily_runtime_ms) / 3600000.0;
+    update_interval: 60s
+
+  - platform: template
+    name: "Total Runtime"
+    id: total_runtime_sensor  
+    unit_of_measurement: "h"
+    accuracy_decimals: 1
+    lambda: |-
+      return (float)id(total_runtime_ms) / 3600000.0;
+    update_interval: 300s
+
+  - platform: template
+    name: "Daily Cycles"
+    id: daily_cycles_sensor
+    accuracy_decimals: 0
+    lambda: |-
+      return (float)id(daily_cycles_count);
+    update_interval: 60s
+
+  - platform: template
+    name: "System Efficiency"
+    id: efficiency_sensor
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    lambda: |-
+      if (id(daily_cycles_count) == 0) return 100.0;
+      float ideal_cycles = id(daily_runtime_ms) / 3600000.0 * 2;
+      if (ideal_cycles == 0) return 100.0;
+      return std::min<float>(100.0f, ideal_cycles / (float)id(daily_cycles_count) * 100.0f);
+    update_interval: 300s
+
+# --------------------
+# BUTTONS pentru comenzi
+# --------------------
+button:
+  - platform: template
+    name: "Reset Daily Stats"
+    on_press:
+      - lambda: |-
+          id(daily_runtime_ms) = 0;
+          id(daily_cycles_count) = 0;
+          ESP_LOGI("stats", "Daily statistics manually reset");
+
+  - platform: template
+    name: "Reset Total Stats"
+    on_press:
+      - lambda: |-
+          id(total_runtime_ms) = 0;
+          id(daily_runtime_ms) = 0;
+          id(daily_cycles_count) = 0;
+          ESP_LOGI("stats", "All statistics manually reset");
+
+  - platform: template
+    name: "Force Stop All Zones"
+    on_press:
+      - lambda: |-
+          if (id(control_mode) == 1) {
+            for (int i = 0; i < 5; i++) {
+              id(ha_request)[i] = false;
+            }
+            ESP_LOGI("manual", "All virtual zones turned OFF via force stop");
+          }
+          for (int i = 0; i < 5; i++) {
+            id(zone_force_keep_until)[i] = 0;
+          }
+          ESP_LOGI("force", "All zone force-keeps cleared");
+
+  - platform: restart
+    name: "Restart Controller"
+
+# --------------------
+# BUCLA PRINCIPALĂ DE CONTROL - 5 ZONE
 # --------------------
 interval:
   - interval: 1s
@@ -418,7 +610,6 @@ interval:
           const unsigned long delay_ms = (unsigned long)id(heating_delay_ms);
 
           // --- 1) READ raw inputs and apply software debounce ---
-          // helper lambda to get raw state by index
           auto read_raw = [&](int idx)->bool {
             switch (idx) {
               case 0: return id(ts_raw_1).state;
@@ -426,26 +617,23 @@ interval:
               case 2: return id(ts_raw_3).state;
               case 3: return id(ts_raw_4).state;
               case 4: return id(ts_raw_5).state;
-              case 5: return id(ts_raw_6).state;
             }
             return false;
           };
 
-          for (int i = 0; i < 6; i++) {
+          for (int i = 0; i < 5; i++) {
             bool raw = read_raw(i);
-            // if changed since last observed sample, reset timer
             if (raw != id(thermostat_raw_last_state)[i]) {
               id(thermostat_raw_last_state)[i] = raw;
               id(thermostat_raw_last_change)[i] = now;
             } else {
-              // stable reading for some time -> if beyond debounce_ms, update thermostat_request
               if ((unsigned long)(now - id(thermostat_raw_last_change)[i]) >= debounce_ms) {
                 if (id(thermostat_request)[i] != raw) {
                   id(thermostat_request)[i] = raw;
                   if (raw) {
-                    ESP_LOGI("debounce", "Thermostat %d debounced -> ON (raw stable %lu ms)", i+1, (unsigned long)(now - id(thermostat_raw_last_change)[i]));
+                    ESP_LOGI("debounce", "Thermostat %d debounced -> ON", i+1);
                   } else {
-                    ESP_LOGI("debounce", "Thermostat %d debounced -> OFF (raw stable %lu ms)", i+1, (unsigned long)(now - id(thermostat_raw_last_change)[i]));
+                    ESP_LOGI("debounce", "Thermostat %d debounced -> OFF", i+1);
                   }
                 }
               }
@@ -453,77 +641,64 @@ interval:
           }
 
           // --- 2) Build effective_request[] depending on mode ---
-          for (int i = 0; i < 6; i++) {
+          for (int i = 0; i < 5; i++) {
             if (id(control_mode) == 1) {
-              // Manual mode: HA virtual switches control requests
               id(effective_request)[i] = id(ha_request)[i];
             } else {
-              // Auto mode: thermostats control requests
               id(effective_request)[i] = id(thermostat_request)[i];
             }
           }
 
-          // --- 3) Determine will-be-real-active state (consider forced keeps) ---
+          // --- 3) Determine will-be-real-active state ---
           bool any_real_active = false;
-          int real_active_count = 0;
-          int last_real_idx = -1;
-          for (int i = 0; i < 6; i++) {
+          for (int i = 0; i < 5; i++) {
             bool will_be = id(effective_request)[i] || (id(zone_force_keep_until)[i] > now);
             if (will_be) {
               any_real_active = true;
-              real_active_count++;
-              last_real_idx = i;
+              break;
             }
           }
 
           // --- 4) Start times management ---
-          // set zone_start_time when a zone becomes real-active (and was not before)
-          for (int i = 0; i < 6; i++) {
+          for (int i = 0; i < 5; i++) {
             bool was_real_before = id(prev_effective_request)[i] || (id(zone_force_keep_until)[i] > now);
             bool now_real = id(effective_request)[i] || (id(zone_force_keep_until)[i] > now);
             if (now_real && !was_real_before) {
-              // zone just became real active
               id(zone_start_time)[i] = now;
-              ESP_LOGI("zones", "Zone %d became real-active at %lu", i+1, now);
+              ESP_LOGI("zones", "Zone %d became real-active", i+1);
             }
-            if (!now_real && ! (id(zone_force_keep_until)[i] > now) ) {
-              // zone not real active and not forced => reset its start time (so future activations start fresh)
+            if (!now_real && !(id(zone_force_keep_until)[i] > now)) {
               if (id(zone_start_time)[i] != 0) {
                 id(zone_start_time)[i] = 0;
-                ESP_LOGI("zones", "Zone %d start_time reset", i+1);
               }
             }
           }
 
-          // --- 5) Protection on STOP: detect zones that just requested STOP and may need to be forced ---
-          for (int i = 0; i < 6; i++) {
+          // --- 5) Protection on STOP ---
+          for (int i = 0; i < 5; i++) {
             bool just_stopped = (id(prev_effective_request)[i] && !id(effective_request)[i]);
             if (just_stopped) {
-              // compute how many would remain active if zone i stops now
               int would_remain = 0;
               int remain_idx = -1;
-              for (int j = 0; j < 6; j++) {
+              for (int j = 0; j < 5; j++) {
                 if (j == i) continue;
                 bool j_active = id(effective_request)[j] || (id(zone_force_keep_until)[j] > now);
                 if (j_active) { would_remain++; remain_idx = j; }
               }
               if (would_remain == 1) {
-                // only one zone would remain -> check its runtime
                 unsigned long start = id(zone_start_time)[remain_idx];
                 unsigned long elapsed = 0;
                 if (start > 0) elapsed = now - start;
                 if (elapsed < delay_ms) {
-                  // force keep zone i until remain_idx passes delay
                   id(zone_force_keep_until)[i] = id(zone_start_time)[remain_idx] + delay_ms;
-                  ESP_LOGI("protect", "Zone %d STOP requested but would leave zone %d alone (elapsed %lu ms < %lu ms). Forcing zone %d until %lu",
-                    i+1, remain_idx+1, elapsed, delay_ms, i+1, (unsigned long)id(zone_force_keep_until)[i]);
+                  ESP_LOGI("protect", "Zone %d forced to stay on for protection", i+1);
                 }
               }
             }
           }
 
           // --- 6) Apply real states to physical relays ---
-          for (int i = 0; i < 6; i++) {
+          for (int i = 0; i < 5; i++) {
             bool real = id(effective_request)[i] || (id(zone_force_keep_until)[i] > now);
             switch (i) {
               case 0:
@@ -541,57 +716,121 @@ interval:
               case 4:
                 if (real) id(phys_relay_zone_5).turn_on(); else id(phys_relay_zone_5).turn_off();
                 break;
-              case 5:
-                if (real) id(phys_relay_zone_6).turn_on(); else id(phys_relay_zone_6).turn_off();
-                break;
             }
           }
 
-          // --- 7) Boiler/pump logic (delay on start, immediate off) ---
+          // --- 7) Boiler logic ---
           if (any_real_active) {
-            // if previously no real active, start pending window
             if (!id(prev_any_real_active) && !id(boiler_active)) {
-              // start pending
               id(boiler_pending) = true;
               id(boiler_pending_since) = now;
-              ESP_LOGI("boiler", "Boiler pending START (zones became active) at %lu", now);
+              ESP_LOGI("boiler", "Boiler pending START");
             }
 
             if (id(boiler_pending) && !id(boiler_active)) {
               if ((unsigned long)(now - id(boiler_pending_since)) >= delay_ms) {
-                // pending expired -> actually start boiler
                 id(boiler_active) = true;
                 id(boiler_pending) = false;
                 id(phys_relay_boiler).turn_on();
-                ESP_LOGI("boiler", "Boiler ACTIVATED after delay at %lu", now);
-              } else {
-                // still pending
-                unsigned long remaining = delay_ms - (unsigned long)(now - id(boiler_pending_since));
-                ESP_LOGD("boiler", "Boiler pending... %lu ms remaining", remaining);
+                ESP_LOGI("boiler", "Boiler ACTIVATED after delay");
               }
             }
-            // if already active -> keep it on
           } else {
-            // no zones real active -> immediate stop
             if (id(boiler_active) || id(boiler_pending)) {
               id(phys_relay_boiler).turn_off();
               id(boiler_active) = false;
               id(boiler_pending) = false;
               id(boiler_pending_since) = 0;
-              ESP_LOGI("boiler", "No zones active -> Boiler & Pump stopped immediately at %lu", now);
+              ESP_LOGI("boiler", "Boiler stopped - no zones active");
             }
           }
 
-          // --- 8) Clear expired zone_force_keep_until and auto-close forced zones on expiry ---
-          for (int i = 0; i < 6; i++) {
+          // --- 8) Clear expired zone force keeps ---
+          for (int i = 0; i < 5; i++) {
             if (id(zone_force_keep_until)[i] > 0 && id(zone_force_keep_until)[i] <= now) {
               id(zone_force_keep_until)[i] = 0;
-              ESP_LOGI("protect", "Force-keep for zone %d expired at %lu -> zone may now close if not requested", i+1, now);
+              ESP_LOGI("protect", "Force-keep for zone %d expired", i+1);
             }
           }
 
-          // --- 9) Update prev arrays for next iteration ---
-          for (int i=0;i<6;i++) {
+          // --- 9) Update prev arrays ---
+          for (int i=0;i<5;i++) {
             id(prev_effective_request)[i] = id(effective_request)[i];
           }
           id(prev_any_real_active) = any_real_active;
+
+          // --- 10) STATISTICI UPDATE ---
+          static unsigned long last_daily_reset = 0;
+          const unsigned long DAILY_RESET_INTERVAL = 24UL * 60UL * 60UL * 1000UL;
+          
+          // Reset zilnic
+          time_t rawtime = ::time(nullptr);
+          if (rawtime > 1609459200) {
+            struct tm * timeinfo = localtime(&rawtime);
+            int current_day = timeinfo->tm_yday;
+            if (current_day != id(last_reset_day)) {
+              id(daily_runtime_ms) = 0;
+              id(daily_cycles_count) = 0;
+              id(last_reset_day) = current_day;
+              last_daily_reset = now;
+              ESP_LOGI("stats", "Daily stats reset - NTP based");
+            }
+          } 
+          else if (last_daily_reset == 0) {
+            last_daily_reset = now;
+          } else if ((now - last_daily_reset) >= DAILY_RESET_INTERVAL) {
+            id(daily_runtime_ms) = 0;
+            id(daily_cycles_count) = 0;
+            last_daily_reset = now;
+            ESP_LOGI("stats", "Daily stats reset - 24h uptime based");
+          }
+          
+          // Update runtime counters
+          static bool was_heating_last_second = false;
+          if (id(boiler_active)) {
+            id(total_runtime_ms) += 1000;
+            id(daily_runtime_ms) += 1000;
+            if (!was_heating_last_second) {
+              id(daily_cycles_count)++;
+              ESP_LOGI("stats", "Heating cycle #%d started", id(daily_cycles_count));
+            }
+          }
+          was_heating_last_second = id(boiler_active);
+          
+          // Build status text
+          if (id(boiler_pending)) {
+            unsigned long remaining = (id(heating_delay_ms) - (now - id(boiler_pending_since))) / 1000;
+            id(system_status_text) = "Power-on delay (" + to_string(remaining) + "s)";
+          } else if (id(boiler_active)) {
+            id(system_status_text) = "Heating active";
+          } else {
+            id(system_status_text) = "Idle";
+          }
+          
+          // Build zones text
+          std::string active_zones = "";
+          std::string forced_zones = "";
+          int active_count = 0;
+          int forced_count = 0;
+          
+          for (int i = 0; i < 5; i++) {
+            bool is_requested = id(effective_request)[i];
+            bool is_forced = (id(zone_force_keep_until)[i] > now);
+            bool is_active = is_requested || is_forced;
+            
+            if (is_active) {
+              if (active_count > 0) active_zones += ", ";
+              active_zones += "Zone " + to_string(i+1);
+              active_count++;
+            }
+            
+            if (is_forced) {
+              if (forced_count > 0) forced_zones += ", ";
+              unsigned long remaining_force = (id(zone_force_keep_until)[i] - now) / 1000;
+              forced_zones += "Zone " + to_string(i+1) + " (" + to_string(remaining_force) + "s)";
+              forced_count++;
+            }
+          }
+          
+          id(active_zones_text) = active_count > 0 ? active_zones : "None";
+          id(forced_zones_text) = forced_count > 0 ? forced_zones : "None";
