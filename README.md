@@ -61,7 +61,6 @@ Controller de încălzire de nivel profesional care gestionează până la **5 z
 | Zona 3 | D5 |
 | Zona 4 | D6 |
 | Zona 5 | D7 |
-| Zona 6 | D0 |
 
 ### Ieșiri relee
 
@@ -72,8 +71,7 @@ Controller de încălzire de nivel profesional care gestionează până la **5 z
 | Releu Zona 3 | RX | „ |
 | Releu Zona 4 | TX | „ |
 | Releu Zona 5 | D8 | „ |
-| Releu Zona 6 | A0 | „ |
-| Pompa + Centrală | D9 | Controlează pompa și releul centralei |
+| Pompa + Centrală | D0 | Controlează pompa și releul centralei |
 
 > **Notă**: Folosirea pinilor RX/TX dezactivează debugging-ul serial
 
