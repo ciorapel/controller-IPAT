@@ -40,10 +40,20 @@ api:
     then:
       - lambda: |-
           ESP_LOGI("api", "Home Assistant connected");
+          if (id(was_manual_before_disconnect)) {
+            id(control_mode) = 1;
+            id(was_manual_before_disconnect) = false;
+            ESP_LOGI("api", "Restored MANUAL mode after reconnect");
+          }
   on_client_disconnected:
     then:
       - lambda: |-
           ESP_LOGI("api", "Home Assistant disconnected");
+          if (id(control_mode) == 1) {
+            id(was_manual_before_disconnect) = true;
+            id(control_mode) = 0;
+            ESP_LOGI("api", "Switched to AUTO (fallback) because HA disconnected");
+          }
 
 ota:
   - platform: esphome
@@ -63,6 +73,10 @@ time:
 # GLOBALS (persistente acolo unde are sens)
 # --------------------
 globals:
+  - id: was_manual_before_disconnect
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   - id: control_mode         
     type: int
     restore_value: yes
