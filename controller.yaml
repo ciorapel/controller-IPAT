@@ -513,20 +513,31 @@ interval:
           for (int i = 0; i < 5; i++) {
             bool just_stopped = (id(prev_effective_request)[i] && !id(effective_request)[i]);
             if (just_stopped) {
-              int would_remain = 0;
-              int remain_idx = -1;
+              // Găsește zona cu cel mai vechi start_time care este încă activă
+              unsigned long oldest_start_time = 0;
+              int oldest_zone_idx = -1;
+              
               for (int j = 0; j < 5; j++) {
-                if (j == i) continue;
+                if (j == i) continue; // Skip zona care tocmai s-a oprit
+                
                 bool j_active = id(effective_request)[j] || (id(zone_force_keep_until)[j] > now);
-                if (j_active) { would_remain++; remain_idx = j; }
+                if (j_active && id(zone_start_time)[j] > 0) {
+                  if (oldest_start_time == 0 || id(zone_start_time)[j] < oldest_start_time) {
+                    oldest_start_time = id(zone_start_time)[j];
+                    oldest_zone_idx = j;
+                  }
+                }
               }
-              if (would_remain == 1) {
-                unsigned long start = id(zone_start_time)[remain_idx];
-                unsigned long elapsed = 0;
-                if (start > 0) elapsed = now - start;
-                if (elapsed < delay_ms) {
-                  id(zone_force_keep_until)[i] = id(zone_start_time)[remain_idx] + delay_ms;
-                  ESP_LOGI("protect", "Zone %d forced to stay on for protection", i+1);
+              
+              // Dacă există o zonă activă cu start_time valid
+              if (oldest_zone_idx != -1 && oldest_start_time > 0) {
+                unsigned long elapsed_since_oldest = now - oldest_start_time;
+                
+                // Dacă zona cea mai veche nu a trecut de delay_ms, protejează zona care se oprește
+                if (elapsed_since_oldest < delay_ms) {
+                  id(zone_force_keep_until)[i] = oldest_start_time + delay_ms;
+                  ESP_LOGI("protect", "Zone %d forced to stay on (oldest active zone %d started %lu ms ago)", 
+                          i+1, oldest_zone_idx+1, elapsed_since_oldest);
                 }
               }
             }
@@ -620,3 +631,13 @@ interval:
 
           id(active_zones_count).publish_state(active_count);
           id(forced_zones_count).publish_state(forced_count);
+
+          if (forced_count > 0 && forced_count == active_count) {
+            // toate zonele forțate sunt active → ștergem toate force-keeps
+            for (int i = 0; i < 5; i++) {
+              if (id(zone_force_keep_until)[i] > 0) {
+                id(zone_force_keep_until)[i] = 0;
+                ESP_LOGI("protect", "Force-keep cleared for zone %d (all forced zones are active)", i+1);
+              }
+            }
+          }
