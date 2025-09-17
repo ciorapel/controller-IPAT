@@ -18,11 +18,7 @@ Controller de încălzire de nivel profesional care gestionează până la **5 z
     
 *   🏠 **Integrare completă Home Assistant**: Switch-uri virtuale cu indicatori vizuali de mod
     
-*   ⚡ **Debounce pentru intrări**: Debounce configurabil (implicit 30s) previne citirile false ale termostatelor
-    
 *   💾 **Stare persistentă**: Valorile critice supraviețuiesc restarturilor ESP
-    
-*   📊 **Statistici bogate**: Urmărirea timpului de funcționare, numărarea ciclurilor, monitorizarea eficienței
     
 *   🌐 **Monitorizare în timp real**: Raportare și diagnosticare a stării
     
@@ -133,11 +129,9 @@ Se poate folosi fără Home Assistant dar configurarea la alte valori față de 
 
 ### Controale
 
-*   **Mod Control** (Select): Selecția modului Auto/Manual
+*   **Mod Control** (Switch): Selecția modului Auto/Manual
     
 *   **Întârziere activare** (Number): Întârzierea pornirii centralei (0-600s)
-    
-*   **Timp debounce** (Number): Debounce intrare termostat (0-300s)
     
 *   **Zonă virtuală 1-5** (Switch): Control manual zonă (dezactivat în modul Auto)
     
@@ -154,16 +148,6 @@ Se poate folosi fără Home Assistant dar configurarea la alte valori față de 
     
 *   **Numărătoarea întârzierii centralei** (Sensor): Întârzierea rămasă pentru pornire
     
-*   **Timpul de funcționare sesiune curentă** (Sensor): Durata sesiunii active de încălzire
-    
-*   **Timpul de funcționare zilnic** (Sensor): Timpul total de încălzire zilnic
-    
-*   **Timpul total de funcționare** (Sensor): Timpul de încălzire pe durata de viață
-    
-*   **Cicluri zilnice** (Sensor): Numărul de cicluri de încălzire astăzi
-    
-*   **Eficiența sistemului** (Sensor): Procentul de eficiență bazat pe frecvența ciclurilor
-    
 
 ### Indicatori de stare
 
@@ -173,20 +157,8 @@ Se poate folosi fără Home Assistant dar configurarea la alte valori față de 
     
 *   **Orice zonă forțată** (Binary): Adevărat când zonele sunt menținute forțat active
     
-*   **Alertă rată cicluri ridicată** (Binary): Avertisment pentru ciclare excesivă
-    
 *   **Controller online** (Binary): Starea conectivității ESP
     
-
-### Acțiuni
-
-*   **Resetează statistici zilnice** (Button): Șterge statisticile zilnice
-    
-*   **Resetează statistici totale** (Button): Șterge toate statisticile
-    
-*   **Oprire forțată toate zonele** (Button): Oprire de urgență toate zonele
-    
-*   **Restart controller** (Button): Repornire ESP
     
 
 🛡️ Caracteristici de siguranță
@@ -203,128 +175,20 @@ Când o zonă solicită să se închidă dar ar lăsa doar o zonă activă mai p
 *   Previne ciclarea rapidă pornit/oprit a centralei
     
 
-### Debounce pentru intrări
-
-*   Timp de debounce configurabil (0-300 secunde)
-    
-*   Previne activările false de la contactele termostatelor
-    
-*   Fiecare zonă urmărită independent
-    
-
-### Gestionarea stării persistente
-
-Stările critice ale sistemului supraviețuiesc restarturilor ESP:
-
-*   Stările zonelor active
-    
-*   Parametrii de configurație
-    
-*   Statisticile de funcționare
-    
-*   Cronometrele de menținere forțată
-    
-
 ### Operare de siguranță
 
 *   Auto-revenire la modul Automat dacă HA se deconectează în timpul modului Manual
     
-*   Protecție watchdog împotriva blocărilor sistemului
-    
    
-
-📈 Statistici și monitorizare
------------------------------
-
-Controlerul oferă date operaționale:
-
-*   **Urmărirea timpului de funcționare**: Timpul total și zilnic de încălzire
-    
-*   **Numărarea ciclurilor**: Monitorizează ciclurile de încălzire pentru analiza eficienței
-    
-*   **Scorul eficienței**: Calculează eficiența sistemului bazată pe frecvența ciclurilor
-    
-*   **Reset zilnic**: Statisticile se resetează automat la miezul nopții (bazat pe NTP)
-    
-*   **Monitorizarea sesiunii**: Urmărește durata sesiunii curente de încălzire
-    
-
 🔧 Parametri de configurare
 ---------------------------
-
-### Parametri de timing
-
-```yaml
-heating_delay_ms: 180000    # 180 seconds startup delay
-debounce_s: 30             # 30 seconds input debounce
-```
 
 ### Ajustabili prin Home Assistant
 
 *   **Întârziere activare**: 0-600 secunde (întârzierea pornirii centralei)
     
-*   **Timp debounce**: 0-300 secunde (filtrarea intrărilor termostatelor)
-    
 *   **Mod control**: Mod de operare Auto/Manual
     
-
-🚨 Depanare
------------
-
-### Probleme comune
-
-**ESP nu se conectează la WiFi**
-
-*   Verificați credențialele WiFi în secrets.yaml
-    
-*   Verificați puterea semnalului la locația instalării
-    
-*   Încercați AP-ul de backup: heating\_controller\_AP (parolă: 12345678)
-    
-
-**Zonele nu răspund**
-
-*   Verificați conexiunile optocupoarelor
-    
-*   Verificați polaritatea cablajului termostatelor
-    
-*   Revedeți setările de debounce (pot fi prea mari)
-    
-
-**Ciclarea scurtă a centralei**
-
-*   Măriți întârzierea de activare în HA
-    
-*   Verificați activarea protecției zonelor în logs
-    
-*   Verificați că toate zonele sunt configurate corespunzător
-    
-
-**Statisticile nu se actualizează**
-
-*   Asigurați-vă că sincronizarea NTP funcționează
-    
-*   Verificați configurația fusului orar
-    
-*   Verificați că stocarea persistentă funcționează
-    
-
-### Debugging
-
-Activați logarea detaliată setând nivelul logger-ului la DEBUG în configurația ESPHome. Monitorizați log-urile prin dashboard-ul ESPHome sau log-urile Home Assistant.
-
-📝 Log-uri
-----------
-
-Sistemul oferă logare detaliată pentru depanare:
-
-```markdown
-[INFO] [debounce] Thermostat 1 debounced -> ON
-[INFO] [boiler] Boiler pending START
-[INFO] [protect] Zone 2 forced to stay on for protection
-[INFO] [boiler] Boiler ACTIVATED after delay
-[INFO] [stats] Heating cycle #3 started
-```
 
 🛠️ Îmbunătățiri viitoare
 -------------------------
