@@ -65,16 +65,6 @@ globals:
     restore_value: yes
     initial_value: '180000'   # 180 s
 
-  - id: thermostat_raw_last_state
-    type: bool[5]
-    restore_value: no
-    initial_value: '{false,false,false,false,false}'
-
-  - id: thermostat_raw_last_change
-    type: unsigned long[5]
-    restore_value: no
-    initial_value: '{0,0,0,0,0}'
-
   - id: thermostat_request   # starea termostatelor (input local)
     type: bool[5]
     restore_value: yes
@@ -130,16 +120,6 @@ globals:
     restore_value: no
     initial_value: '"Idle"'
     
-  - id: active_zones_text
-    type: std::string
-    restore_value: no
-    initial_value: '""'
-
-  - id: forced_zones_text
-    type: std::string
-    restore_value: no
-    initial_value: '""'
-
 # --------------------
 # INPUTS: raw thermostats (internal = true -> nu sunt expuse direct)
 # --------------------
