@@ -1,6 +1,6 @@
 substitutions:
-  device_name: "controller-ipat"
-  friendly_name: "Controller IPAT"
+  device_name: "controller-ipat-parter"
+  friendly_name: "Controller IPAT Parter"
   # Inputuri de termostate (5 zone)
   thermostat_pin_1: "D1"
   thermostat_pin_2: "D2"
@@ -39,7 +39,7 @@ wifi:
     password: "12345678"
 
 logger:
-  level: NONE
+  level: INFO
 
 api:
   reboot_timeout: 0s
@@ -180,14 +180,6 @@ binary_sensor:
     lambda: |-
       return id(boiler_pending);
       
-  - platform: template
-    name: "Zone Forced"
-    id: zone_forced_binary
-    lambda: |-
-      return (id(forced_zone_index) >= 0 && id(zone_force_keep_until) > millis());
-
-
-
 # --------------------
 # PHYSICAL RELAYS (nu sunt expuse direct)
 # --------------------
@@ -201,6 +193,7 @@ switch:
       - lambda: |-
           ESP_LOGI("main", "Control mode set to MANUAL via switch");
     turn_off_action:
+      - script.execute: force_stop_all_zones
       - lambda: |-
           ESP_LOGI("main", "Control mode set to AUTO via switch");
   - platform: gpio
@@ -348,7 +341,7 @@ number:
     name: "Activation Delay (s)"
     id: activation_delay_number
     min_value: 0
-    max_value: 600
+    max_value: 300
     step: 10
     optimistic: true
     restore_value: yes
@@ -427,7 +420,18 @@ sensor:
     id: active_zones_count
     unit_of_measurement: "zones"
     accuracy_decimals: 0
-   
+  - platform: template
+    name: "Forced Zone Remaining"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    lambda: |-
+      if (id(zone_force_keep_until) > millis()) {
+        unsigned long remaining = (id(zone_force_keep_until) - millis()) / 1000;
+        return (float)remaining;
+      } else {
+        return 0;
+      }
+    update_interval: 1s
   - platform: template
     name: "Boiler Delay Countdown"
     id: boiler_delay_countdown
@@ -441,7 +445,6 @@ sensor:
       return (float)remaining;
     update_interval: 1s
 
-
 # --------------------
 # BUTTONS pentru comenzi
 # --------------------
@@ -449,20 +452,23 @@ button:
   - platform: template
     name: "Force Stop All Zones"
     on_press:
+      - script.execute: force_stop_all_zones
+
+  - platform: restart
+    name: "Restart Controller"
+
+script:
+  - id: force_stop_all_zones
+    then:
       - lambda: |-
-          if (id(manual_mode_switch).state){
-            for (int i = 0; i < 5; i++) {
-              id(ha_request)[i] = false;
-            }
-            ESP_LOGI("manual", "All virtual zones turned OFF via force stop");
+          for (int i = 0; i < 5; i++) {
+            id(ha_request)[i] = false;
           }
+          ESP_LOGI("manual", "All virtual zones turned OFF via force stop");
           // Clear force keep
           id(zone_force_keep_until) = 0;
           id(forced_zone_index) = -1;
           ESP_LOGI("force", "Zone force-keep cleared");
-
-  - platform: restart
-    name: "Restart Controller"
 
 # --------------------
 # BUCLA PRINCIPALĂ DE CONTROL - 5 ZONE (OPTIMIZATĂ)
@@ -509,37 +515,63 @@ interval:
           }
 
           // --- 5) Protection logic (BEFORE updating timers) ---
-          // Check if any zone just stopped and find eligible zone for forcing
           int stopped_zone = -1;
           for (int i = 0; i < 5; i++) {
-            bool just_stopped = (id(prev_effective_request)[i] && !id(effective_request)[i]);
-            if (just_stopped) {
+            if (id(prev_effective_request)[i] && !id(effective_request)[i]) {
               stopped_zone = i;
-              ESP_LOGI("protect", "Zone %d just stopped (time: %lu ms)", i + 1, id(zone_start_time)[i]);
+              ESP_LOGI("protect", "Zone %d just stopped", i + 1);
               break;
             }
           }
 
-          // If a zone stopped, check if it should be forced (if it had completed delay)
-          if (stopped_zone != -1) {
-            bool stopped_zone_completed_delay = (id(zone_start_time)[stopped_zone] > delay_ms);
-            
-            if (stopped_zone_completed_delay) {
-              // Clear any existing force
-              id(zone_force_keep_until) = 0;
-              id(forced_zone_index) = -1;
-              
-              // Force the stopped zone that had completed delay
-              id(zone_force_keep_until) = now + delay_ms;
-              id(forced_zone_index) = stopped_zone;
-              
-              ESP_LOGI("protect", "Zone %d (had completed delay: %lu ms) forced to stay on for %lu ms", 
-                      stopped_zone + 1, id(zone_start_time)[stopped_zone], delay_ms);
-            } else {
-              ESP_LOGI("protect", "Zone %d NOT forced - had not completed delay (%lu ms < %lu ms)", 
-                      stopped_zone + 1, id(zone_start_time)[stopped_zone], delay_ms);
+          // Curăță forțarea dacă a expirat
+          if (id(zone_force_keep_until) <= now) {
+            id(zone_force_keep_until) = 0;
+            id(forced_zone_index) = -1;
+          }
+
+          // Construim array-ul de zone mature (active > delay)
+          int mature[5];
+          int mature_count = 0;
+          for (int i = 0; i < 5; i++) {
+            if (id(zone_start_time)[i] > delay_ms) {
+              mature[mature_count++] = i;
             }
           }
+
+          // Construim lista de pending (active <= delay)
+          int pending[5];
+          int pending_count = 0;
+          for (int i = 0; i < 5; i++) {
+            if (id(effective_request)[i] && id(zone_start_time)[i] <= delay_ms) {
+              pending[pending_count++] = i;
+            }
+          }
+
+          // Logica specială
+          if (stopped_zone != -1) {
+            bool was_mature = (id(zone_start_time)[stopped_zone] > delay_ms);
+
+            if (was_mature && mature_count == 1 && mature[0] == stopped_zone) {
+              if (pending_count > 0) {
+                // ținem zona până când primul pending intră în array
+                int candidate = pending[0];
+                unsigned long remaining = delay_ms - id(zone_start_time)[candidate];
+                if (remaining < 0) remaining = 0;
+
+                id(zone_force_keep_until) = now + remaining + 1000UL;  // mică marjă de 1s
+                id(forced_zone_index) = stopped_zone;
+
+                ESP_LOGI("protect", "Zone %d forced to stay ON until pending zone %d reaches delay (%lu ms).",
+                        stopped_zone + 1, candidate + 1, remaining);
+              } else {
+                ESP_LOGI("protect", "Zone %d stopped, no pending -> allow stop.", stopped_zone + 1);
+              }
+            }
+            id(zone_start_time)[stopped_zone] = 0;
+          }
+
+
 
           // --- 6) Update zone start times (LIMITED to delay + 1s) ---
           const unsigned long max_start_time = delay_ms + 1000; // delay + 1s pentru comparații clare
