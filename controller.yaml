@@ -76,12 +76,12 @@ globals:
 
   - id: thermostat_request   # starea termostatelor (input local)
     type: bool[5]
-    restore_value: yes
+    restore_value: no
     initial_value: '{false,false,false,false,false}'
 
   - id: ha_request           # cererile din HA (virtual switches)
     type: bool[5]
-    restore_value: yes
+    restore_value: no
     initial_value: '{false,false,false,false,false}'
 
   - id: effective_request    # ce se aplica (in Auto -> thermostat_request, in Manual -> ha_request)
@@ -91,17 +91,17 @@ globals:
 
   - id: zone_start_time      # timestamp (ms) cand zona a devenit efectiv ON - LIMITAT la delay + 1s
     type: unsigned long[5]
-    restore_value: yes
+    restore_value: no
     initial_value: '{0,0,0,0,0}'
 
   - id: zone_force_keep_until   # pana la timestamp (ms) mentinem deschisa zona (protectie)
     type: unsigned long
-    restore_value: yes
+    restore_value: no
     initial_value: '0'
 
   - id: forced_zone_index    # care zonă este forțată (-1 dacă niciuna)
     type: int
-    restore_value: yes
+    restore_value: no
     initial_value: '-1'
 
   - id: prev_effective_request
@@ -116,7 +116,7 @@ globals:
 
   - id: boiler_active
     type: bool
-    restore_value: yes
+    restore_value: no
     initial_value: 'false'
 
   - id: boiler_pending_since
