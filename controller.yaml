@@ -1,6 +1,6 @@
 substitutions:
-  device_name: "heating_controller"
-  friendly_name: "Heating Controller"
+  device_name: "controller-ipat"
+  friendly_name: "Controller IPAT"
   # Inputuri de termostate (5 zone)
   thermostat_pin_1: "D1"
   thermostat_pin_2: "D2"
@@ -407,6 +407,19 @@ text_sensor:
       return id(manual_mode_switch).state ? std::string("Manual") : std::string("Auto");
     update_interval: 1s
 
+  - platform: template
+    name: "Forced Zones"
+    id: forced_zones_status
+    lambda: |-
+      unsigned long now = millis();
+      for (int i = 0; i < 5; i++) {
+        if (id(zone_force_keep_until)[i] > now) {
+          return std::string("Zone ") + std::to_string(i + 1);
+        }
+      }
+      return std::string("None");
+    update_interval: 1s
+
 # --------------------
 # SENSORS numerici - Timeri și statistici
 # --------------------
@@ -416,13 +429,7 @@ sensor:
     id: active_zones_count
     unit_of_measurement: "zones"
     accuracy_decimals: 0
-
-  - platform: template
-    name: "Forced Zones"
-    id: forced_zones_count
-    unit_of_measurement: "zones"
-    accuracy_decimals: 0
-    
+   
   - platform: template
     name: "Boiler Delay Countdown"
     id: boiler_delay_countdown
@@ -509,37 +516,63 @@ interval:
             }
           }
 
-          // --- 5) Protection on STOP ---
+          // --- 5) Protection on STOP - Cea mai veche zonă oprită rămâne în force-keep ---
+
+          // Găsește prima zonă care tocmai s-a oprit (cea mai mică index)
+          int first_stopped_zone = -1;
           for (int i = 0; i < 5; i++) {
             bool just_stopped = (id(prev_effective_request)[i] && !id(effective_request)[i]);
             if (just_stopped) {
-              // Găsește zona cu cel mai vechi start_time care este încă activă
-              unsigned long oldest_start_time = 0;
-              int oldest_zone_idx = -1;
+              first_stopped_zone = i;
+              break; // Folosește prima zona găsită
+            }
+          }
+
+          // Procesează doar prima zonă oprită găsită
+          if (first_stopped_zone != -1) {
+            // Găsește zona cu cel mai vechi start_time care este încă activă
+            unsigned long oldest_start_time = 0;
+            int oldest_zone_idx = -1;
+            
+            for (int j = 0; j < 5; j++) {
+              if (j == first_stopped_zone) continue; // Skip zona care tocmai s-a oprit
               
-              for (int j = 0; j < 5; j++) {
-                if (j == i) continue; // Skip zona care tocmai s-a oprit
+              bool j_active = id(effective_request)[j] || (id(zone_force_keep_until)[j] > now);
+              if (j_active && id(zone_start_time)[j] > 0) {
+                if (oldest_start_time == 0 || id(zone_start_time)[j] < oldest_start_time) {
+                  oldest_start_time = id(zone_start_time)[j];
+                  oldest_zone_idx = j;
+                }
+              }
+            }
+            
+            // Dacă există o zonă activă cu start_time valid
+            if (oldest_zone_idx != -1 && oldest_start_time > 0) {
+              unsigned long elapsed_since_oldest = now - oldest_start_time;
+              
+              // Dacă zona cea mai veche nu a trecut de delay_ms
+              if (elapsed_since_oldest < delay_ms) {
+                unsigned long new_force_until = oldest_start_time + delay_ms;
                 
-                bool j_active = id(effective_request)[j] || (id(zone_force_keep_until)[j] > now);
-                if (j_active && id(zone_start_time)[j] > 0) {
-                  if (oldest_start_time == 0 || id(zone_start_time)[j] < oldest_start_time) {
-                    oldest_start_time = id(zone_start_time)[j];
-                    oldest_zone_idx = j;
+                // Șterge orice force-keep existent
+                for (int k = 0; k < 5; k++) {
+                  if (id(zone_force_keep_until)[k] > 0) {
+                    id(zone_force_keep_until)[k] = 0;
+                    ESP_LOGI("protect", "Cleared previous force-keep from zone %d", k+1);
                   }
                 }
-              }
-              
-              // Dacă există o zonă activă cu start_time valid
-              if (oldest_zone_idx != -1 && oldest_start_time > 0) {
-                unsigned long elapsed_since_oldest = now - oldest_start_time;
                 
-                // Dacă zona cea mai veche nu a trecut de delay_ms, protejează zona care se oprește
-                if (elapsed_since_oldest < delay_ms) {
-                  id(zone_force_keep_until)[i] = oldest_start_time + delay_ms;
-                  ESP_LOGI("protect", "Zone %d forced to stay on (oldest active zone %d started %lu ms ago)", 
-                          i+1, oldest_zone_idx+1, elapsed_since_oldest);
-                }
+                // Aplică force-keep pentru prima zonă oprită
+                id(zone_force_keep_until)[first_stopped_zone] = new_force_until;
+                unsigned long delay_remaining = new_force_until > now ? (new_force_until - now) : 0;
+                ESP_LOGI("protect", "Zone %d (first stopped) forced to stay on (%lu ms remaining, protecting zone %d)", 
+                        first_stopped_zone+1, delay_remaining, oldest_zone_idx+1);
+              } else {
+                ESP_LOGI("protect", "Zone %d NOT forced - oldest active zone %d has passed delay (%lu ms)", 
+                        first_stopped_zone+1, oldest_zone_idx+1, elapsed_since_oldest);
               }
+            } else {
+              ESP_LOGI("protect", "Zone %d NOT forced - no valid active zone found for reference", first_stopped_zone+1);
             }
           }
 
@@ -615,29 +648,42 @@ interval:
           }
           
           // Build zones text
-          std::string active_zones = "";
-          std::string forced_zones = "";
           int active_count = 0;
-          int forced_count = 0;
-          
+          bool any_forced = false;
+
           for (int i = 0; i < 5; i++) {
             bool is_requested = id(effective_request)[i];
             bool is_forced = (id(zone_force_keep_until)[i] > now);
             bool is_active = is_requested || is_forced;
             
             if (is_active) active_count++;
-            if (is_forced) forced_count++;
+            if (is_forced) any_forced = true;
           }
 
           id(active_zones_count).publish_state(active_count);
-          id(forced_zones_count).publish_state(forced_count);
 
-          if (forced_count > 0 && forced_count == active_count) {
-            // toate zonele forțate sunt active → ștergem toate force-keeps
+          // Dacă toate zonele active sunt forțate (și există zone forțate)
+          if (any_forced && active_count > 0) {
+            // Verifică dacă toate zonele active sunt doar forțate
+            bool all_active_are_forced = true;
             for (int i = 0; i < 5; i++) {
-              if (id(zone_force_keep_until)[i] > 0) {
-                id(zone_force_keep_until)[i] = 0;
-                ESP_LOGI("protect", "Force-keep cleared for zone %d (all forced zones are active)", i+1);
+              bool is_requested = id(effective_request)[i];
+              bool is_forced = (id(zone_force_keep_until)[i] > now);
+              bool is_active = is_requested || is_forced;
+              
+              if (is_active && !is_forced) {
+                all_active_are_forced = false;
+                break;
+              }
+            }
+            
+            if (all_active_are_forced) {
+              // Șterge toate force-keeps dacă toate zonele active sunt doar forțate
+              for (int i = 0; i < 5; i++) {
+                if (id(zone_force_keep_until)[i] > 0) {
+                  id(zone_force_keep_until)[i] = 0;
+                  ESP_LOGI("protect", "Force-keep cleared for zone %d (all active zones are forced)", i+1);
+                }
               }
             }
           }
