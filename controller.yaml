@@ -24,8 +24,8 @@ esphome:
     then:
       - lambda: |-
           id(manual_mode_status) = id(manual_mode_switch).state;
-          ESP_LOGI("boot", "Global manual_mode_status = %s", id(manual_mode_status) ? "true" : "false");
-
+          ESP_LOGI("boot", "Manual Mode at boot = %s", id(manual_mode_status) ? "ON" : "OFF");
+          
 esp8266:
   board: d1_mini
   framework:
@@ -43,21 +43,23 @@ logger:
   level: NONE # NU ACTIVA LOGAREA DECÂT PENTRU DEBUGGING ! PINII RX SI TX SUNT FOLOSITI PENTRU RELEE !
 
 api:
-  on_client_disconnected:
-    then:
-      - lambda: |-
-          ESP_LOGI("api", "HA disconnected - switch to AUTO temporarily");
-          // salvăm starea curentă
-          id(saved_manual_mode) = id(manual_mode_switch).state;
-          // trecem pe Auto
-          id(manual_mode_switch).turn_off();
-
   on_client_connected:
     then:
       - lambda: |-
-          ESP_LOGI("api", "HA connected - restoring previous manual state");
-          // restaurăm starea salvată anterior
-          if (id(saved_manual_mode)) id(manual_mode_switch).turn_on();
+          ESP_LOGI("api", "Home Assistant connected");
+          // Restaurăm modul salvat înainte de deconectare
+          if (id(saved_manual_mode)) {
+            id(manual_mode_switch).turn_on();
+          } 
+  on_client_disconnected:
+    then:
+      - lambda: |-
+          ESP_LOGI("api", "Home Assistant disconnected - switching to AUTO temporarily");
+          // Salvăm starea curentă
+          id(saved_manual_mode) = id(manual_mode_switch).state;
+          // Trecem pe Auto
+          id(manual_mode_switch).turn_off();
+
 
 
 ota:
@@ -136,14 +138,13 @@ globals:
 
   - id: saved_manual_mode
     type: bool
-    restore_value: yes
-    initial_value: "false"
+    restore_value: no      # doar RAM, nu flash
+    initial_value: 'false'
 
   - id: manual_mode_status
     type: bool
     restore_value: no
     initial_value: "false"
-
 # --------------------
 # INPUTS: raw thermostats (internal = true -> nu sunt expuse direct)
 # --------------------
@@ -206,15 +207,15 @@ switch:
   - platform: template
     name: "Manual Mode"
     id: manual_mode_switch
-    restore_mode: RESTORE_DEFAULT_OFF   # prima dată e OFF, apoi reține ultima stare
+    restore_mode: RESTORE_DEFAULT_OFF
     optimistic: true
     turn_on_action:
       - lambda: |-
-          ESP_LOGI("mode", "Manual Mode = ON");
+          ESP_LOGI("switch", "Manual Mode = ON");
     turn_off_action:
-      - script.execute: force_stop_all_zones
       - lambda: |-
-          ESP_LOGI("mode", "Manual Mode = OFF");
+          ESP_LOGI("switch", "Manual Mode = OFF");
+
 
   - platform: gpio
     pin: ${relay_pin_1}
@@ -499,6 +500,10 @@ interval:
   - interval: 1s
     then:
       - lambda: |-
+          bool manual_active = id(manual_mode_switch).state;
+          id(manual_mode_status) = manual_active;
+          ESP_LOGD("control", "Manual active = %s", manual_active ? "ON" : "OFF");
+
           unsigned long heating_delay_s = id(heating_delay_ms) / 1000;
           if ((unsigned long)id(activation_delay_number).state != heating_delay_s) {
             id(activation_delay_number).publish_state((float)heating_delay_s);
