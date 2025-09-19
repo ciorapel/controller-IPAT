@@ -379,7 +379,7 @@ text_sensor:
     id: ts2_status
     update_interval: 1s
     lambda: |-
-      return std::string(id(ts_raw_2).state ? "Heating" : "Idle");
+      return std::string(id(thermostat_request)[1] ? "Heating" : "Idle");
 
   - platform: template
     name: "Thermostat 3"
