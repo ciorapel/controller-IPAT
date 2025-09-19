@@ -16,20 +16,21 @@ substitutions:
   relay_pin_5: "D8"
 
   boiler_relay_pin: "D0"
-  
+
 esphome:
   name: ${device_name}
   on_boot:
-    priority: 600
+    priority: -100
     then:
       - lambda: |-
-          id(heating_delay_ms) = (unsigned long)(id(activation_delay_number).state * 1000);
-          ESP_LOGI("main", "Activation delay restored on boot: %d ms", (int)id(heating_delay_ms));
+          id(manual_mode_status) = id(manual_mode_switch).state;
+          ESP_LOGI("boot", "Global manual_mode_status = %s", id(manual_mode_status) ? "true" : "false");
 
 esp8266:
   board: d1_mini
   framework:
     version: recommended
+  restore_from_flash: true
 
 wifi:
   ssid: !secret wifi_ssid
@@ -42,28 +43,28 @@ logger:
   level: NONE # NU ACTIVA LOGAREA DECÂT PENTRU DEBUGGING ! PINII RX SI TX SUNT FOLOSITI PENTRU RELEE !
 
 api:
-  on_client_connected:
-    then:
-      - lambda: |-
-          ESP_LOGI("api", "Home Assistant connected");
-          // Restaurăm modul salvat înainte de deconectare
-          if (id(saved_manual_mode)) {
-            id(manual_mode_switch).turn_on();
-          } else {
-            id(manual_mode_switch).turn_off();
-          }
   on_client_disconnected:
     then:
       - lambda: |-
-          ESP_LOGI("api", "Home Assistant disconnected - switching to AUTO temporarily");
-          // Salvăm starea curentă
+          ESP_LOGI("api", "HA disconnected - switch to AUTO temporarily");
+          // salvăm starea curentă
           id(saved_manual_mode) = id(manual_mode_switch).state;
-          // Trecem pe Auto
+          // trecem pe Auto
           id(manual_mode_switch).turn_off();
+
+  on_client_connected:
+    then:
+      - lambda: |-
+          ESP_LOGI("api", "HA connected - restoring previous manual state");
+          // restaurăm starea salvată anterior
+          if (id(saved_manual_mode)) id(manual_mode_switch).turn_on();
+
 
 ota:
   - platform: esphome
 
+web_server:
+  port: 80
 
 # --------------------
 # GLOBALS (persistente acolo unde are sens)
@@ -73,7 +74,6 @@ globals:
     type: unsigned long
     restore_value: yes
     initial_value: '180000'   # 180 s
-
   - id: thermostat_request   # starea termostatelor (input local)
     type: bool[5]
     restore_value: no
@@ -128,16 +128,22 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
-  
+
   - id: system_status_text
     type: std::string
     restore_value: no
     initial_value: '"Idle"'
-    
+
   - id: saved_manual_mode
     type: bool
     restore_value: yes
-    initial_value: 'false'
+    initial_value: "false"
+
+  - id: manual_mode_status
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
 # --------------------
 # INPUTS: raw thermostats (internal = true -> nu sunt expuse direct)
 # --------------------
@@ -186,13 +192,13 @@ binary_sensor:
     id: system_heating_binary
     lambda: |-
       return id(boiler_active);
-      
-  - platform: template  
+
+  - platform: template
     name: "System Pending"
     id: system_pending_binary
     lambda: |-
       return id(boiler_pending);
-      
+
 # --------------------
 # PHYSICAL RELAYS (nu sunt expuse direct)
 # --------------------
@@ -200,15 +206,16 @@ switch:
   - platform: template
     name: "Manual Mode"
     id: manual_mode_switch
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: RESTORE_DEFAULT_OFF   # prima dată e OFF, apoi reține ultima stare
     optimistic: true
     turn_on_action:
       - lambda: |-
-          ESP_LOGI("main", "Control mode set to MANUAL via switch");
+          ESP_LOGI("mode", "Manual Mode = ON");
     turn_off_action:
       - script.execute: force_stop_all_zones
       - lambda: |-
-          ESP_LOGI("main", "Control mode set to AUTO via switch");
+          ESP_LOGI("mode", "Manual Mode = OFF");
+
   - platform: gpio
     pin: ${relay_pin_1}
     id: phys_relay_zone_1
@@ -357,7 +364,6 @@ number:
     max_value: 300
     step: 10
     optimistic: true
-    restore_value: yes
     set_action:
       - lambda: |-
           id(heating_delay_ms) = (unsigned long)(x * 1000);
@@ -407,7 +413,7 @@ text_sensor:
     lambda: |-
       return id(system_status_text);
     update_interval: 1s
-    
+
   - platform: template
     name: "Controller Mode"
     lambda: |-
@@ -453,7 +459,7 @@ sensor:
     lambda: |-
       if (!id(boiler_pending)) return 0;
       unsigned long elapsed = millis() - id(boiler_pending_since);
-      unsigned long remaining = id(heating_delay_ms) > elapsed ? 
+      unsigned long remaining = id(heating_delay_ms) > elapsed ?
         (id(heating_delay_ms) - elapsed) / 1000 : 0;
       return (float)remaining;
     update_interval: 1s
@@ -469,6 +475,9 @@ button:
 
   - platform: restart
     name: "Restart Controller"
+
+  - platform: factory_reset
+    name: "Factory Reset (NVS)"
 
 script:
   - id: force_stop_all_zones
@@ -490,9 +499,14 @@ interval:
   - interval: 1s
     then:
       - lambda: |-
+          unsigned long heating_delay_s = id(heating_delay_ms) / 1000;
+          if ((unsigned long)id(activation_delay_number).state != heating_delay_s) {
+            id(activation_delay_number).publish_state((float)heating_delay_s);
+            ESP_LOGI("main", "activation_delay_number updated to match heating_delay_ms: %lu s", heating_delay_s);
+          }
           const unsigned long now = millis();
           const unsigned long delay_ms = (unsigned long)id(heating_delay_ms);
-          
+
           // --- 1) Update thermostat states ---
           id(thermostat_request)[0] = id(ts_raw_1).state;
           id(thermostat_request)[1] = id(ts_raw_2).state;
@@ -600,22 +614,22 @@ interval:
 
           // --- 6) Update zone start times (LIMITED to delay + 1s) ---
           const unsigned long max_start_time = delay_ms + 1000; // delay + 1s pentru comparații clare
-          
+
           for (int i = 0; i < 5; i++) {
             bool is_forced = (id(forced_zone_index) == i && id(zone_force_keep_until) > now);
-            bool was_real_before = id(prev_effective_request)[i] || 
+            bool was_real_before = id(prev_effective_request)[i] ||
                                  (id(forced_zone_index) == i && id(zone_force_keep_until) > now);
             bool now_real = id(effective_request)[i] || is_forced;
-            
+
             if (now_real && !was_real_before) {
               id(zone_start_time)[i] = 0; // Start counting from 0
               ESP_LOGI("zones", "Zone %d became real-active - timer reset", i+1);
             }
-            
+
             if (now_real && id(zone_start_time)[i] < max_start_time) {
               id(zone_start_time)[i] += 1000; // Increment by 1s each cycle
             }
-            
+
             if (!now_real) {
               id(zone_start_time)[i] = 0; // Reset when zone becomes inactive
             }
@@ -625,7 +639,7 @@ interval:
           for (int i = 0; i < 5; i++) {
             bool is_forced = (id(forced_zone_index) == i && id(zone_force_keep_until) > now);
             bool real = id(effective_request)[i] || is_forced;
-            
+
             switch (i) {
               case 0:
                 if (real) id(phys_relay_zone_1).turn_on(); else id(phys_relay_zone_1).turn_off();
@@ -685,7 +699,7 @@ interval:
           } else {
             id(system_status_text) = "Idle";
           }
-          
+
           // Count active zones
           int active_count = 0;
           for (int i = 0; i < 5; i++) {
