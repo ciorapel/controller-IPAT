@@ -464,6 +464,29 @@ sensor:
         (id(heating_delay_ms) - elapsed) / 1000 : 0;
       return (float)remaining;
     update_interval: 1s
+  - platform: wifi_signal
+    name: "WiFi Signal Strength"
+    id: wifi_signal_raw
+    update_interval: 30s
+    internal: true
+    
+  - platform: template
+    name: "WiFi Signal Quality"
+    id: wifi_signal_percent
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: "mdi:wifi"
+    lambda: |-
+      float dbm = id(wifi_signal_raw).state;
+      const float max_dbm = -30.0;
+      const float min_dbm = -90.0;
+      float percent = ((dbm - min_dbm) / (max_dbm - min_dbm)) * 100.0;
+      if (percent > 100.0) percent = 100.0;
+      if (percent < 0.0) percent = 0.0;
+      
+      return percent;
+    update_interval: 30s
+
 
 # --------------------
 # BUTTONS pentru comenzi
