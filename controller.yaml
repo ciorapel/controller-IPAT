@@ -210,11 +210,14 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     optimistic: true
     turn_on_action:
+      - script.execute: force_stop_all_zones
       - lambda: |-
           ESP_LOGI("switch", "Manual Mode = ON");
     turn_off_action:
+      - script.execute: force_stop_all_zones
       - lambda: |-
           ESP_LOGI("switch", "Manual Mode = OFF");
+  
 
 
   - platform: gpio
